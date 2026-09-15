@@ -1,0 +1,91 @@
+name: ci-build
+'on':
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.gitmodules'
+      - 'module'
+      - '.github/workflows/build.yml'
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup ndk
+        run: |
+          wget -O ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip -nv
+          mkdir -p ~/ndk_temp
+          unzip ndk.zip -d ~/ndk_temp 2>&1 > /dev/null
+          mv ~/ndk_temp/*/* ~/ndk_temp
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        id: cache-cargo
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Setup Rust toolchains
+        run: |
+          rustup default stable
+          rustup target add aarch64-linux-android
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-multilib libclang-dev zip
+
+      - name: Build
+        run: |
+          export ANDROID_NDK_HOME=~/ndk_temp
+          export ANDROID_NDK_ROOT=~/ndk_temp
+          NDK_PREBUILT=~/ndk_temp/toolchains/llvm/prebuilt/linux-x86_64
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK_PREBUILT/bin/aarch64-linux-android33-clang
+          LIBCLANG_SO=$(find /usr/lib -maxdepth 4 -name 'libclang.so*' -path '*llvm*' 2>/dev/null | head -n1)
+          [ -z "$LIBCLANG_SO" ] && LIBCLANG_SO=$(find /usr/lib -maxdepth 4 -name 'libclang.so*' 2>/dev/null | head -n1)
+          export LIBCLANG_PATH=$(dirname "$LIBCLANG_SO")
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android -I$NDK_PREBUILT/sysroot/usr/include -isystem $(echo $NDK_PREBUILT/lib/clang/*/include)"
+
+          cargo build --release --target aarch64-linux-android
+
+          cp target/aarch64-linux-android/release/gpugovernor module/bin/
+          rm -rf module/.git
+
+          mkdir -p temp_package
+          cp -r module/bin temp_package/
+          cp -r module/config temp_package/
+          cp -r module/docs temp_package/
+          cp -r module/META-INF temp_package/
+          cp -r module/script temp_package/
+          cp -r module/webroot temp_package/
+
+          cp module/action.sh temp_package/
+          cp module/customize.sh temp_package/
+          cp module/module.prop temp_package/
+          cp module/service.sh temp_package/
+          cp module/uninstall.sh temp_package/
+          cp module/volt_list.txt temp_package/
+
+          cd temp_package/
+          zip -r ../Mediatek_Mali_GPU_Governor.zip .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mediatek_Mali_GPU_Governor
+          path: Mediatek_Mali_GPU_Governor.zip
